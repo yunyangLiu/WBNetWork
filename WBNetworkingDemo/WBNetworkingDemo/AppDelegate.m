@@ -6,7 +6,8 @@
 //
 
 #import "AppDelegate.h"
-
+#import <SystemConfiguration/SystemConfiguration.h>
+#import "Reachability.h"
 @interface AppDelegate ()
 
 @end
@@ -16,9 +17,28 @@
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     // Override point for customization after application launch.
+    
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(reachabilityChanged:) name:kReachabilityChangedNotification object:nil];
+    
     return YES;
 }
 
+/**
+ *此函数通过判断联网方式，通知给用户
+ */
+- (void)reachabilityChanged:(NSNotification *)notification
+{
+    Reachability *curReachability = [notification object];
+    NSParameterAssert([curReachability isKindOfClass:[Reachability class]]);
+    NetworkStatus curStatus = [curReachability currentReachabilityStatus];
+    if(curStatus == NotReachable) {
+        NSDictionary *dic = @{@"status":@"0"};
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"isNotReachable" object:nil userInfo:dic];
+    }else{
+        NSDictionary *dic = @{@"status":@"1"};
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"noNotReachable" object:nil userInfo:dic];
+    }
+}
 
 #pragma mark - UISceneSession lifecycle
 

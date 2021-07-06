@@ -24,13 +24,12 @@
     // Do any additional setup after loading the view.
     
 
-    self.person = [Person new];
-    self.person.fullName = @"李四";
-    
-    [self.person addObserver:self forKeyPath:@"nikedName"
-    options:NSKeyValueObservingOptionNew context:nil];
-    
-    self.person.fullName = @"张三";
+ 
+    NSLog(@"Reachable ==== %@",NSLocalizedStringFromTable(@"Not Reachable", @"WBNetworking", nil));
+
+    NSLog(@"Reachable ==== %@",NSLocalizedString(@"Reachable", nil));
+
+
     
     
 }
@@ -38,7 +37,6 @@
 -(void)observeValueForKeyPath:(NSString *)keyPath
                      ofObject:(id)object change:(NSDictionary<NSKeyValueChangeKey,id> *)change
                       context:(void *)context{
-    NSLog(@"new ===  %@",change[@"new"]);
     
 }
 

@@ -76,12 +76,12 @@ static BOOL WBSecKeyIsEqualToKey(SecKeyRef key1, SecKeyRef key2) {
 #endif
 }
 
-
+//二进制证书转换为公钥
 static id WBPublicKeyForCertificate(NSData *certificate) {
     id allowedPublicKey = nil; //允许的公钥
     SecCertificateRef allowedCertificate; //证书
     SecPolicyRef policy = nil; //策略对象
-    SecTrustRef allowedTrust = nil; //是否允许信任
+    SecTrustRef allowedTrust = nil; //信任的证书
     SecTrustResultType result;
 
     //根据certificate 创建 SecCertificateRef
@@ -156,7 +156,7 @@ static NSArray * WBCertificateTrustChainForServerTrust(SecTrustRef serverTrust) 
     return [NSArray arrayWithArray:trustChain];
 }
 
-//从serverTrust 获取公共的信任的钥匙串
+//从serverTrust 获取公钥
 static NSArray * WBPublicKeyTrustChainForServerTrust(SecTrustRef serverTrust) {
     SecPolicyRef policy = SecPolicyCreateBasicX509();
     CFIndex certificateCount = SecTrustGetCertificateCount(serverTrust);
@@ -190,7 +190,10 @@ static NSArray * WBPublicKeyTrustChainForServerTrust(SecTrustRef serverTrust) {
     CFRelease(policy);
 
     return [NSArray arrayWithArray:trustChain];
+    
 }
+
+
 @interface WBSecurityPolicy()
 @property (readwrite, nonatomic, assign) WBSSLPinningMode SSLPinningMode; //SSL的链接模式
 @property (readwrite, nonatomic, strong) NSSet *pinnedPublicKeys;//稳定的公钥集合
