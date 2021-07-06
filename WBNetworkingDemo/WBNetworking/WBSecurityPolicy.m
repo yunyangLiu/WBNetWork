@@ -89,7 +89,8 @@ static id WBPublicKeyForCertificate(NSData *certificate) {
     //__Require_Quiet  _out 是一个标记，如果条件不成立，即allowedCertificate == NULL，就会跳到我们打标记的地方，_out:的地方
     __Require_Quiet(allowedCertificate != NULL, _out);
 
-    policy = SecPolicyCreateBasicX509(); //或许一个策略对象
+    //获取一个策略对象
+    policy = SecPolicyCreateBasicX509();
     
     //__Require_noErr_Quiet  如果发生异常，就跳转到标记的地方
     __Require_noErr_Quiet(SecTrustCreateWithCertificates(allowedCertificate, policy, &allowedTrust), _out);
@@ -98,6 +99,11 @@ static id WBPublicKeyForCertificate(NSData *certificate) {
 ////需要操作的代码
 //#pragma clang diagnostic pop
 #pragma clang diagnostic push
+    //-Wdeprecated-declarations 方法启用警告
+    //-Wincompatible-pointer-types 不兼容指针类型
+    //-Warc-retain-cycles 循环引用
+    //-Wunused-variable 未使用变量
+    //-Wcovered-switch-default 未使用defalut
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     __Require_noErr_Quiet(SecTrustEvaluate(allowedTrust, &result), _out);
 #pragma clang diagnostic pop
@@ -122,7 +128,152 @@ _out:
     return allowedPublicKey;
 }
 
+//服务信任是否无效
+static BOOL WBServerTrustIsValid(SecTrustRef serverTrust) {
+    BOOL isValid = NO;
+    SecTrustResultType result;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    __Require_noErr_Quiet(SecTrustEvaluate(serverTrust, &result), _out);
+#pragma clang diagnostic pop
+
+    isValid = (result == kSecTrustResultUnspecified || result == kSecTrustResultProceed);
+
+_out:
+    return isValid;
+}
+
+//从serverTrust获取证书信任串数组
+static NSArray * WBCertificateTrustChainForServerTrust(SecTrustRef serverTrust) {
+    CFIndex certificateCount = SecTrustGetCertificateCount(serverTrust);
+    NSMutableArray *trustChain = [NSMutableArray arrayWithCapacity:(NSUInteger)certificateCount];
+
+    for (CFIndex i = 0; i < certificateCount; i++) {
+        SecCertificateRef certificate = SecTrustGetCertificateAtIndex(serverTrust, i);
+        [trustChain addObject:(__bridge_transfer NSData *)SecCertificateCopyData(certificate)];
+    }
+
+    return [NSArray arrayWithArray:trustChain];
+}
+
+//从serverTrust 获取公共的信任的钥匙串
+static NSArray * WBPublicKeyTrustChainForServerTrust(SecTrustRef serverTrust) {
+    SecPolicyRef policy = SecPolicyCreateBasicX509();
+    CFIndex certificateCount = SecTrustGetCertificateCount(serverTrust);
+    NSMutableArray *trustChain = [NSMutableArray arrayWithCapacity:(NSUInteger)certificateCount];
+    for (CFIndex i = 0; i < certificateCount; i++) {
+        SecCertificateRef certificate = SecTrustGetCertificateAtIndex(serverTrust, i);
+
+        SecCertificateRef someCertificates[] = {certificate};
+        CFArrayRef certificates = CFArrayCreate(NULL, (const void **)someCertificates, 1, NULL);
+
+        SecTrustRef trust;
+        __Require_noErr_Quiet(SecTrustCreateWithCertificates(certificates, policy, &trust), _out);
+        SecTrustResultType result;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        __Require_noErr_Quiet(SecTrustEvaluate(trust, &result), _out);
+#pragma clang diagnostic pop
+        [trustChain addObject:(__bridge_transfer id)SecTrustCopyPublicKey(trust)];
+
+    _out:
+        if (trust) {
+            CFRelease(trust);
+        }
+
+        if (certificates) {
+            CFRelease(certificates);
+        }
+
+        continue;
+    }
+    CFRelease(policy);
+
+    return [NSArray arrayWithArray:trustChain];
+}
+@interface WBSecurityPolicy()
+@property (readwrite, nonatomic, assign) WBSSLPinningMode SSLPinningMode; //SSL的链接模式
+@property (readwrite, nonatomic, strong) NSSet *pinnedPublicKeys;//稳定的公开key集合
+@end
 
 @implementation WBSecurityPolicy
+
+/// 从目录bundle 获取所有以.cer 结尾的证书，并将证书专为二进制数据，放在数组中返回
+/// @param bundle  目录
++ (NSSet *)certificatesInBundle:(NSBundle *)bundle {
+    NSArray *paths = [bundle pathsForResourcesOfType:@"cer" inDirectory:@"."];
+
+    NSMutableSet *certificates = [NSMutableSet setWithCapacity:[paths count]];
+    for (NSString *path in paths) {
+        NSData *certificateData = [NSData dataWithContentsOfFile:path];
+        [certificates addObject:certificateData];
+    }
+
+    return [NSSet setWithSet:certificates];
+}
+
+/// 获取一个默认的安全策略 securityPolicy
++ (instancetype)defaultPolicy{
+    WBSecurityPolicy *securityPolicy = [[self alloc]init];
+    securityPolicy.SSLPinningMode = WBSSLPinningModeNone;
+    return securityPolicy;
+}
+
+
+/// 从默认目录获取证书数据，并根据策略模式创建一个安全策略
+/// @param pinningMode 策略模式
++ (instancetype)policyWithPinningMode:(WBSSLPinningMode)pinningMode{
+    
+    NSSet <NSData *> *defaultPinnedCertificates = [self certificatesInBundle:[NSBundle mainBundle]];
+    return [self policyWithPinningMode:pinningMode withPinnedCertificates:defaultPinnedCertificates];
+}
+
+
+/// 根据策略模式和证书数据创建一个安全策略
+/// @param pinningMode 策略模式
+/// @param pinnedCertificates 证书二进制数据
++ (instancetype)policyWithPinningMode:(WBSSLPinningMode)pinningMode withPinnedCertificates:(NSSet<NSData *> *)pinnedCertificates{
+    
+    WBSecurityPolicy *securityPolicy = [[self alloc]init];
+    securityPolicy.SSLPinningMode = pinningMode;
+    [securityPolicy setPinnedCertificates:pinnedCertificates];
+    return securityPolicy;
+}
+
+
+/// 初始化init
+- (instancetype)init{
+    self = [super init];
+    if (!self) {
+        return  nil;
+    }
+    //默认需要验证证书中的域名
+    self.validatesDomainName = YES;
+    return self;
+}
+
+
+/// 设置证书数据，得到pinnedPublicKeys
+/// @param pinnedCertificates 所有证书的二进制数据集合
+- (void)setPinnedCertificates:(NSSet<NSData *> *)pinnedCertificates{
+    
+    _pinnedCertificates = pinnedCertificates;
+    
+    if (self.pinnedCertificates) {
+        //setWithCapacity 会根据后边的count创建set，可以提高内存效率。注：指定为3，实际上也是可以大于3的。NSDictionary和NSArray也是一样
+        NSMutableSet *mutablePinnedPublickeys = [NSMutableSet setWithCapacity:[self.pinnedCertificates count]];
+        for (NSData *certificate in self.pinnedCertificates) {
+            id publicKey = WBPublicKeyForCertificate(certificate);
+            if (!publicKey) {
+                continue;
+            }
+            [mutablePinnedPublickeys addObject:publicKey];
+        }
+        self.pinnedPublicKeys = [NSSet setWithSet:mutablePinnedPublickeys];
+        
+    }else{
+        self.pinnedPublicKeys = nil;
+    }
+}
 
 @end

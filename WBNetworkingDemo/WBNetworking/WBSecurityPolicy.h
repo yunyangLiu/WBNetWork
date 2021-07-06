@@ -59,6 +59,9 @@ typedef NS_ENUM(NSInteger,WBSSLPinningMode) {
  The criteria by which server trust should be evaluated against the pinned SSL certificates. Defaults to `AFSSLPinningModeNone`.
  
  根据 固定的SSL证书判断服务信任的标准，默认WBSSLPinningModeNone
+ 
+ readonly 只读，外部不可以修改，只能通过初始化方法policyWithPinningMode:和policyWithPinningMode: withPinnedCertificates: 来指定
+ 
  */
 @property (readonly, nonatomic, assign) WBSSLPinningMode SSLPinningMode;
 
