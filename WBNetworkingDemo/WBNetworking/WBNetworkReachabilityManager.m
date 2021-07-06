@@ -69,10 +69,16 @@ static WBNetworkReachabilityStatus WBNetworkReachabilityStatusForFlags(SCNetwork
      */
     //& 按位与 只有都为1的时候才为1 如 011 & 010 = 010
     
+    //flags == kSCNetworkFlagsReachable
     BOOL isReachable = ((flags & kSCNetworkFlagsReachable) != 0);
+    
     BOOL needsConnection = ((flags & kSCNetworkReachabilityFlagsConnectionRequired) != 0);
+    
     BOOL canConnectionAutomatically = (((flags & kSCNetworkReachabilityFlagsConnectionOnDemand) != 0) || ((flags & kSCNetworkReachabilityFlagsConnectionOnTraffic) != 0));
+    
     BOOL canConnectWithoutUserInteraction = (canConnectionAutomatically && (flags & kSCNetworkReachabilityFlagsInterventionRequired) == 0);
+    
+    //可以建立连接且（不需要手动连接并上可以自动连接）
     BOOL isNetworkReachable = (isReachable &&(!needsConnection || canConnectWithoutUserInteraction));
     WBNetworkReachabilityStatus status = WBNetworkReachabilityStatusUnknown;
     if (isNetworkReachable == NO) {
@@ -80,10 +86,12 @@ static WBNetworkReachabilityStatus WBNetworkReachabilityStatusForFlags(SCNetwork
     }
     
 #if TARGET_OS_IPHONE
+    //流量
     else if((flags & kSCNetworkReachabilityFlagsIsWWAN) != 0){
         status = WBNetworkReachabilityStatusReachableViaWWAN;
     }
 #endif
+    //Wi-Fi
     else{
         status = WBNetworkReachabilityStatusReachableWiFi;
     }
