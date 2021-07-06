@@ -6,11 +6,14 @@
 //
 
 #import "ViewController.h"
+#import "Person.h"
 
 #import <AssertMacros.h>
 
 
 @interface ViewController ()
+
+@property (nonatomic, strong) Person *person;
 
 @end
 
@@ -20,17 +23,23 @@
     [super viewDidLoad];
     // Do any additional setup after loading the view.
     
-    
-    NSString *str = @"111111111";
-    __Require_Quiet(NO, _out);
-    str = @"222222222";
 
-
-_out:
+    self.person = [Person new];
+    self.person.fullName = @"李四";
     
-    NSLog(@"%@",str);
-  
+    [self.person addObserver:self forKeyPath:@"nikedName"
+    options:NSKeyValueObservingOptionNew context:nil];
+    
+    self.person.fullName = @"张三";
+    
+    
 }
-
+//观擦的回调
+-(void)observeValueForKeyPath:(NSString *)keyPath
+                     ofObject:(id)object change:(NSDictionary<NSKeyValueChangeKey,id> *)change
+                      context:(void *)context{
+    NSLog(@"new ===  %@",change[@"new"]);
+    
+}
 
 @end

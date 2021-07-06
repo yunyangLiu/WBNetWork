@@ -15,6 +15,7 @@
 		37D63F3E2692F6C600C83726 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 37D63F3C2692F6C600C83726 /* LaunchScreen.storyboard */; };
 		37D63F412692F6C600C83726 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 37D63F402692F6C600C83726 /* main.m */; };
 		37D63F50269301FE00C83726 /* WBSecurityPolicy.m in Sources */ = {isa = PBXBuildFile; fileRef = 37D63F4F269301FE00C83726 /* WBSecurityPolicy.m */; };
+		37DF39B9269440200016B4C0 /* Person.m in Sources */ = {isa = PBXBuildFile; fileRef = 37DF39B8269440200016B4C0 /* Person.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -34,6 +35,8 @@
 		37D63F4C2692FF9E00C83726 /* WBNetworkingDemo.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WBNetworkingDemo.entitlements; sourceTree = "<group>"; };
 		37D63F4E269301FE00C83726 /* WBSecurityPolicy.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WBSecurityPolicy.h; sourceTree = "<group>"; };
 		37D63F4F269301FE00C83726 /* WBSecurityPolicy.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WBSecurityPolicy.m; sourceTree = "<group>"; };
+		37DF39B7269440200016B4C0 /* Person.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Person.h; sourceTree = "<group>"; };
+		37DF39B8269440200016B4C0 /* Person.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = Person.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -79,6 +82,8 @@
 				37D63F3C2692F6C600C83726 /* LaunchScreen.storyboard */,
 				37D63F3F2692F6C600C83726 /* Info.plist */,
 				37D63F402692F6C600C83726 /* main.m */,
+				37DF39B7269440200016B4C0 /* Person.h */,
+				37DF39B8269440200016B4C0 /* Person.m */,
 			);
 			path = WBNetworkingDemo;
 			sourceTree = "<group>";
@@ -162,6 +167,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				37DF39B9269440200016B4C0 /* Person.m in Sources */,
 				37D63F362692F6C300C83726 /* ViewController.m in Sources */,
 				37D63F50269301FE00C83726 /* WBSecurityPolicy.m in Sources */,
 				37D63F302692F6C300C83726 /* AppDelegate.m in Sources */,

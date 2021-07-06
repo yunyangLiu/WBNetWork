@@ -78,7 +78,7 @@ static BOOL WBSecKeyIsEqualToKey(SecKeyRef key1, SecKeyRef key2) {
 
 
 static id WBPublicKeyForCertificate(NSData *certificate) {
-    id allowedPublicKey = nil; //得到key
+    id allowedPublicKey = nil; //允许的公钥
     SecCertificateRef allowedCertificate; //证书
     SecPolicyRef policy = nil; //策略对象
     SecTrustRef allowedTrust = nil; //是否允许信任
@@ -193,7 +193,7 @@ static NSArray * WBPublicKeyTrustChainForServerTrust(SecTrustRef serverTrust) {
 }
 @interface WBSecurityPolicy()
 @property (readwrite, nonatomic, assign) WBSSLPinningMode SSLPinningMode; //SSL的链接模式
-@property (readwrite, nonatomic, strong) NSSet *pinnedPublicKeys;//稳定的公开key集合
+@property (readwrite, nonatomic, strong) NSSet *pinnedPublicKeys;//稳定的公钥集合
 @end
 
 @implementation WBSecurityPolicy
@@ -274,6 +274,143 @@ static NSArray * WBPublicKeyTrustChainForServerTrust(SecTrustRef serverTrust) {
     }else{
         self.pinnedPublicKeys = nil;
     }
+}
+
+#pragma mark -
+- (BOOL)evaluateServerTrust:(SecTrustRef)serverTrust forDomain:(NSString *)domain{
+    
+    if (domain && self.allowInvalidCertificates && self.validatesDomainName && (self.SSLPinningMode == WBSSLPinningModeNone || self.pinnedCertificates.count == 0)) {
+        //  According to the docs, you should only trust your provided certs for evaluation. 你必须对你信任的证书进行评估
+        //  Pinned certificates are added to the trust. Without pinned certificates,there is nothing to evaluate against. 固定的证书已被添加到信任中，没有固定的证书，就不需要进行评估
+        //  为了验证自签名证书的域名，您必须使用固定的证书。
+        NSLog(@"In order to validate a domain name for self signed certificates, you MUST use pinning.");
+        return NO;
+    }
+    
+    NSMutableArray *policies = [NSMutableArray array];
+    
+    //需要验证域名时，添加一个域名验证策略
+    if(self.validatesDomainName){
+        [policies addObject:(__bridge_transfer id)SecPolicyCreateSSL(true, (__bridge CFStringRef)domain)];
+    }else{
+        [policies addObject:(__bridge_transfer id)SecPolicyCreateBasicX509()];
+    }
+    
+    //设置验证策略
+    SecTrustSetPolicies(serverTrust, (__bridge  CFArrayRef)policies);
+    
+    //AFSSLPinningModeNone 时，allowInvalidCertificates为YES ，则代表服务器任何证书都能验证
+    //如果是NO，则需要判断此服务器是否是系统信任证书
+    if (self.SSLPinningMode == WBSSLPinningModeNone) {
+        return self.allowInvalidCertificates || WBServerTrustIsValid(serverTrust);
+    }
+    //如果服务器证书不是系统信任证书，且不允许不信任证书通过验证则返回NO
+    else if (!self.allowInvalidCertificates && !WBServerTrustIsValid(serverTrust)){
+        return  NO;
+    }
+    
+    switch (self.SSLPinningMode) {
+        case WBSSLPinningModeCertificate:{
+            // AFSSLPinningModeCertificate 是直接将本地证书设置为信任的根证书，然后来进行判断，并且比较本地证书内容和服务器证书内容是否一致，如果有一个相同则返回YES
+            NSMutableArray *pinnedCertificates = [NSMutableArray array];
+            for (NSData *certificateData in self.pinnedCertificates) {
+                [pinnedCertificates addObject:(__bridge_transfer  id)SecCertificateCreateWithData(NULL, (__bridge  CFDataRef)certificateData)];
+            }
+            //设置本地证书为根证书
+            SecTrustSetAnchorCertificates(serverTrust, (__bridge  CFArrayRef)pinnedCertificates);
+            
+            //通过本地证书来判断服务器证书是否可信，不可信则不通过
+            if (!WBServerTrustIsValid(serverTrust)) {
+                return NO;
+            }
+            
+            //判断本地证书和服务器证书是否相同
+            NSArray *serverCertificates = WBCertificateTrustChainForServerTrust(serverTrust);
+            for (NSData *trustChainCertificate in [serverCertificates reverseObjectEnumerator]) {
+                if ([self.pinnedCertificates containsObject:trustChainCertificate]) {
+                    return YES;
+                }
+            }
+            
+        
+        }
+            return NO;
+
+        case WBSSLPinningModePublicKey:{
+            //是通过比较证书中公钥部分来进行校验。通过SecTrustCopyPublicKey方法获取本地证书和服务器证书，进行比较，如果有一个相同则验证通过
+            NSInteger trustedPublicKeyCount = 0;
+            NSArray *publicKeys = WBPublicKeyTrustChainForServerTrust(serverTrust);
+            for (id trustChainPublicKey in publicKeys) {
+                
+                for (id pinnedPublicKey in self.pinnedPublicKeys) {
+                    if (WBSecKeyIsEqualToKey((__bridge  SecKeyRef)trustChainPublicKey, (__bridge SecKeyRef)pinnedPublicKey)) {
+                        trustedPublicKeyCount += 1;
+                    }
+                }
+            }
+            return trustedPublicKeyCount > 0;
+            
+            
+        }
+            return NO;
+        default:
+            return NO;
+    }
+    
+    return NO;
+}
+
+#pragma mark - NSKeyValueObserving
+
+//用kvo监听pinnedPublicKeys，当pinnedCertificates发生改变时，观察者也会收到通知。
++ (NSSet *)keyPathsForValuesAffectingPinnedPublicKeys{
+    return [NSSet setWithObject:@"pinnedCertificates"];
+}
+
+#pragma mark - NSSecureCoding
+//是否支持加密编码
++ (BOOL)supportsSecureCoding{
+    return YES;
+}
+
+//二进制数据解密为对象
+- (instancetype)initWithCoder:(NSCoder *)coder{
+    
+    self = [super init];
+    if (!self) {
+        return  nil;
+    }
+    self.SSLPinningMode = [[coder decodeObjectOfClass:[NSNumber class] forKey:NSStringFromSelector(@selector(SSLPinningMode))] unsignedIntegerValue];
+    self.allowInvalidCertificates = [coder decodeObjectOfClass:[NSNumber class] forKey:NSStringFromSelector(@selector(allowInvalidCertificates))];
+    self.validatesDomainName = [coder decodeObjectOfClass:[NSNumber class] forKey:NSStringFromSelector(@selector(validatesDomainName))];
+    self.pinnedCertificates = [coder decodeObjectOfClass:[NSNumber class] forKey:NSStringFromSelector(@selector(pinnedCertificates))];
+    return self;
+    
+}
+
+//对象加密成二进制数据
+- (void)encodeWithCoder:(NSCoder *)coder{
+    
+    [coder encodeObject:[NSNumber numberWithInteger:self.SSLPinningMode] forKey:NSStringFromSelector(@selector(SSLPinningMode))];
+    [coder encodeBool:self.allowInvalidCertificates forKey:NSStringFromSelector(@selector(allowInvalidCertificates))];
+    [coder encodeBool:self.validatesDomainName forKey:NSStringFromSelector(@selector(validatesDomainName))];
+    [coder encodeObject:self.pinnedCertificates forKey:NSStringFromSelector(@selector(pinnedCertificates))];
+    
+}
+
+#pragma mark - NSCopying
+
+// 确保copy方法的对象的属性和原属性保持一致
+- (instancetype)copyWithZone:(NSZone *)zone{
+    
+    WBSecurityPolicy *securityPolicy = [[[self class] allocWithZone:zone]init];
+    
+    securityPolicy.SSLPinningMode = self.SSLPinningMode;
+    securityPolicy.allowInvalidCertificates = self.allowInvalidCertificates;
+    securityPolicy.validatesDomainName = self.validatesDomainName;
+    securityPolicy.pinnedCertificates = [self.pinnedCertificates copyWithZone:zone];
+    
+    return securityPolicy;
 }
 
 @end

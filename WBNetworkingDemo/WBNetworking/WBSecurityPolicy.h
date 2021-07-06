@@ -12,7 +12,7 @@ NS_ASSUME_NONNULL_BEGIN
 //SSLPinningMode SSL的链接模式 pinning固定的
 typedef NS_ENUM(NSInteger,WBSSLPinningMode) {
     WBSSLPinningModeNone, //无
-    WBSSLPinningModePublicKey,//公共的key
+    WBSSLPinningModePublicKey,//公钥
     WBSSLPinningModeCertificate,//证书
 };
 
