@@ -24,12 +24,13 @@
     // Do any additional setup after loading the view.
     
 
- 
-    NSLog(@"Reachable ==== %@",NSLocalizedStringFromTable(@"Not Reachable", @"WBNetworking", nil));
-
-    NSLog(@"Reachable ==== %@",NSLocalizedString(@"Reachable", nil));
-
-
+    int (^block)() = ^(){
+        
+        return 2;
+    };
+    
+    int a =  block();
+    
     
     
 }
