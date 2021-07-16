@@ -24,12 +24,17 @@
     // Do any additional setup after loading the view.
     
 
-    int (^block)() = ^(){
-        
-        return 2;
-    };
+//    int (^block)() = ^(){
+//
+//        return 2;
+//    };
+//
+//    int a =  block();
     
-    int a =  block();
+    UITextField *textfiled = [[UITextField alloc]initWithFrame:CGRectMake(100, 200, 200, 40)];
+    textfiled.backgroundColor = UIColor.redColor;
+    textfiled.textAlignment = NSTextAlignmentRight;
+    [self.view addSubview:textfiled];
     
     
     
