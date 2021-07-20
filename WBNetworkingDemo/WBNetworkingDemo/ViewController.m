@@ -9,6 +9,7 @@
 #import "Person.h"
 
 #import <AssertMacros.h>
+#import "WBURLRequestSeriailzation.h"
 
 
 @interface ViewController ()
@@ -31,11 +32,21 @@
 //
 //    int a =  block();
     
-    UITextField *textfiled = [[UITextField alloc]initWithFrame:CGRectMake(100, 200, 200, 40)];
-    textfiled.backgroundColor = UIColor.redColor;
-    textfiled.textAlignment = NSTextAlignmentRight;
-    [self.view addSubview:textfiled];
+//    UITextField *textfiled = [[UITextField alloc]initWithFrame:CGRectMake(100, 200, 200, 40)];
+//    textfiled.backgroundColor = UIColor.redColor;
+//    textfiled.textAlignment = NSTextAlignmentRight;
+//    [self.view addSubview:textfiled];
+//
     
+    WBHTTPRequestSerializer *s = [[WBHTTPRequestSerializer alloc]init];
+    
+    
+    [s setQueryStringSerializationWithBlock:^NSString * _Nullable(NSURLRequest * _Nonnull request, id  _Nonnull parameters, NSError *__autoreleasing  _Nullable * _Nullable error) {
+        
+        NSLog(@"%@",request.URL.absoluteString);
+        return  request.URL.absoluteString;
+        
+    }];
     
     
 }
