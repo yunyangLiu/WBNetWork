@@ -152,7 +152,7 @@ NSArray * WBQueryStringPairsFromKeyAndValue(NSString *key, id value) {
 
     return mutableQueryStringComponents;
 }
-#pragma mark -
+#pragma mark - WBStreamingMultipartFormData
 @interface WBStreamingMultipartFormData : NSObject<WBMultipartFormData>
 
 - (instancetype)initWithURLRequest:(NSMutableURLRequest *)urlRequest
@@ -295,8 +295,529 @@ static void *WBHTTPRequestSerializerObserverContext = &WBHTTPRequestSerializerOb
     [self didChangeValueForKey:NSStringFromSelector(@selector(timeoutInterval))];
 }
 
+- (NSDictionary *)HTTPRequestHeaders{
+    
+    NSDictionary __block *value;
+    
+    //同步执行并行队列
+    dispatch_sync(self.requestHeaderModificationQueue, ^{
+        value = [NSDictionary dictionaryWithDictionary:self.mutableHTTPRequestHeaders];
+    });
+    return  value;
+}
+
+- (void)setValue:(NSString *)value forHTTPHeaderField:(NSString *)field{
+    
+    dispatch_barrier_sync(self.requestHeaderModificationQueue, ^{
+        [self.mutableHTTPRequestHeaders setValue:value forKey:field];
+        
+    });
+}
+
+- (NSString *)valueForHTTPHeaderField:(NSString *)field{
+    
+    NSString __block *value;
+    dispatch_sync(self.requestHeaderModificationQueue, ^{
+        
+        value = [self.mutableHTTPRequestHeaders valueForKey:field];
+    });
+    return value;
+}
+
+- (void)setAuthorizationHeaderFieldWithUsername:(NSString *)username password:(NSString *)password{
+    
+    NSData *basicAuthCredentials = [[NSString stringWithFormat:@"%@:%@",username,password] dataUsingEncoding:NSUTF8StringEncoding];
+    NSString *base64AuthCredentials = [basicAuthCredentials base64EncodedStringWithOptions:(NSDataBase64EncodingOptions)0];
+    [self setValue:[NSString stringWithFormat:@"Basic %@",base64AuthCredentials] forHTTPHeaderField:@"Authorization"];
+    
+    
+}
+
+- (void)clearAuthorizationHeader{
+    dispatch_barrier_sync(self.requestHeaderModificationQueue, ^{
+       
+        [self.mutableHTTPRequestHeaders removeObjectForKey:@"Authorization"];
+    });
+}
 
 #pragma mark -
+- (void)setQueryStringSerializationStyle:(WBHTTPRequestQueryStringSerializationStyle)queryStringSerializationStyle{
+    
+    self.queryStringSerializationStyle = queryStringSerializationStyle;
+    self.queryStringSerialization = nil;
+    
+}
+
+- (void)setQueryStringSerializationWithBlock:(NSString * _Nullable (^)(NSURLRequest * _Nonnull, id _Nonnull, NSError *__autoreleasing  _Nullable * _Nullable))block{
+    
+    self.queryStringSerialization = block;
+}
+
+#pragma mark -
+- (NSMutableURLRequest *)requestWithMethod:(NSString *)method
+                                 URLString:(NSString *)URLString
+                                parameters:(id)parameters
+                                     error:(NSError * _Nullable __autoreleasing *)error{
+    //断言评估一个条件，如果条件为 false ，调用当前线程的断点句柄。
+    NSParameterAssert(method);
+    NSParameterAssert(URLString);
+    NSURL *url = [NSURL URLWithString:URLString];
+    NSParameterAssert(url);
+    NSMutableURLRequest *mutableRequest = [[NSMutableURLRequest alloc]initWithURL:url];
+    mutableRequest.HTTPMethod = method;
+    for (NSString *keyPath in self.mutableObservedChangedKeyPaths) {
+        [mutableRequest setValue:[self valueForKey:keyPath] forKey:keyPath];
+    }
+    
+    //mutableCopy 不管copy的对象是可变还是不可变，都会重新拷贝一份内存
+    //copy 只有当为可变对象时，才会考呗内存，否则，则只会拷贝地址
+    mutableRequest = [[self requestBySerializingRequest:mutableRequest withParameters:parameters error:error] mutableCopy];
+    return  mutableRequest;
+}
+
+- (NSMutableURLRequest *)multipartFormRequestWithMethod:(NSString *)method
+                                              URLString:(NSString *)URLString
+                                             parameters:(NSDictionary<NSString *,id> *)parameters
+                              constructingBodyWithBlock:(void (^)(id<WBMultipartFormData> _Nonnull))block
+                                                  error:(NSError * _Nullable __autoreleasing *)error{
+    NSParameterAssert(method);
+    NSParameterAssert(![method isEqualToString:@"GET"] &&![method isEqualToString:@"HEAD"]);
+    NSMutableURLRequest *mutableRequest = [self requestWithMethod:method URLString:URLString parameters:nil error:error];
+    __block WBStreamingMultipartFormData *fromData = [[WBStreamingMultipartFormData alloc]initWithURLRequest:mutableRequest stringEncoding:NSUTF8StringEncoding];
+    if (parameters) {
+        for (WBQueryStringPair *pair in WBQueryStringPairsFromDictionary(parameters)) {
+            
+            NSData *data = nil;
+            
+            if ([pair.value isKindOfClass:[NSData class]]) {
+                
+                data = pair.value;
+                
+            }else if ([pair.value isEqual:[NSNull null]]){
+                
+                data = [NSData data];
+            }
+            else{
+                
+                data = [[pair.value description] dataUsingEncoding:self.stringEncoding];
+            }
+            if (data) {
+                [fromData appendPartWithFormData:data name:[pair.field description]];
+            }
+        }
+    }
+    
+    return  [fromData requestByFinalizingMultipartFormData];
+    
+    
+}
+
+- (NSMutableURLRequest *)requestWithMultipartFormRequest:(NSURLRequest *)request writingStreamContentsToFile:(NSURL *)fileURL completionHandler:(void (^)(NSError * _Nullable))handler{
+    NSParameterAssert(request.HTTPBodyStream);
+    NSParameterAssert([fileURL isFileURL]);
+    NSInputStream *inputStream = request.HTTPBodyStream;
+    NSOutputStream *outputStream = [[NSOutputStream alloc]initWithURL:fileURL append:NO];
+    __block NSError *error = nil;
+    
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        
+        [inputStream scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
+        [outputStream scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
+        
+        [inputStream open];
+        [outputStream open];
+        while ([inputStream  hasBytesAvailable] && [outputStream hasSpaceAvailable]) {
+            uint8_t bufffer[1024];
+            
+            NSInteger bytesRead = [inputStream read:bufffer maxLength:1024];
+            if (inputStream.streamError || bytesRead < 0) {
+                error = inputStream.streamError;
+                break;
+            }
+            
+            NSInteger bytesWritten = [outputStream write:bufffer maxLength:(NSInteger)bytesRead];
+            if (outputStream.streamError || bytesWritten < 0) {
+                error = outputStream.streamError;
+                break;
+            }
+            if (bytesRead == 0 && bytesWritten == 0) {
+                break;
+            }
+        }
+        
+        [outputStream close];
+        [inputStream close];
+        
+        if (handler) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+               
+                handler(error);
+            });
+        }
+        
+    });
+    
+    NSMutableURLRequest *mutableRequest = [request mutableCopy];
+    mutableRequest.HTTPBodyStream = nil;
+    
+    return  mutableRequest;
+}
+
+#pragma mark - WBURLRequestSerialization
+- (NSURLRequest *)requestBySerializingRequest:(NSURLRequest *)request withParameters:(id)parameters error:(NSError * _Nullable __autoreleasing *)error{
+    
+    
+    NSParameterAssert(request);
+    
+    NSMutableURLRequest *mutableRequest = [request mutableCopy];
+    
+    [self.HTTPRequestHeaders enumerateKeysAndObjectsUsingBlock:^(NSString * _Nonnull key, NSString * _Nonnull obj, BOOL * _Nonnull stop) {
+       
+        if (![request valueForHTTPHeaderField:key]) {
+            [mutableRequest setValue:obj forHTTPHeaderField:key];
+        }
+    }];
+    
+    NSString *query = nil;
+    if (parameters) {
+        if (self.queryStringSerialization) {
+            
+            NSError *serializationError;
+            query = self.queryStringSerialization(request,parameters,&serializationError);
+            
+            if (serializationError) {
+                if (error) {
+                    *error = serializationError;
+                }
+                return nil;
+            }
+        }else{
+            
+            switch (self.queryStringSerializationStyle) {
+                case WBHTTPRequestQueryStringSerializationDefaultStyle:
+                    query = WBQueryStringFromParameters(parameters);
+                    break;
+                    
+                default:
+                    break;
+            }
+        }
+    }
+    if ([self.HTTPMethodsEncodingParametersInURI containsObject:[[request HTTPMethod] uppercaseString]]) {
+        if (query && query.length > 0) {
+            mutableRequest.URL = [NSURL URLWithString:[[mutableRequest.URL absoluteString]stringByAppendingFormat:mutableRequest.URL.query?@"&%@":@"?%@",query]];
+        }
+    }else{
+        if (!query) {
+            query = @"";
+        }
+        if (![mutableRequest valueForHTTPHeaderField:@"Content-Type"]) {
+            [mutableRequest setHTTPBody:[query dataUsingEncoding:self.stringEncoding]];
+        }
+        
+    }
+    return mutableRequest;
+}
+#pragma mark - NSKeyValueObserving
++ (BOOL)automaticallyNotifiesObserversForKey:(NSString *)key{
+    
+    if ([WBHTTPRequestSerializerObservedKeyPaths() containsObject:key]) {
+        
+        return  NO;
+    }
+    
+    return [super automaticallyNotifiesObserversForKey:key];
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary<NSKeyValueChangeKey,id> *)change context:(void *)context{
+    
+    if (context == WBHTTPRequestSerializerObserverContext) {
+        if ([change[NSKeyValueChangeNewKey] isEqual:[NSNull null]]) {
+            [self.mutableObservedChangedKeyPaths removeObject:keyPath];
+        }else{
+            [self.mutableObservedChangedKeyPaths addObject:keyPath];
+        }
+    }
+}
+
+
+#pragma mark - NSSecureCoding
++(BOOL)supportsSecureCoding{
+    return  YES;
+}
+
+- (instancetype)initWithCoder:(NSCoder *)coder{
+    self = [self init];
+    if (!self) {
+        return  nil;
+    }
+    
+    self.mutableHTTPRequestHeaders = [[coder decodeObjectOfClass:[NSDictionary class] forKey:NSStringFromSelector(@selector(mutableHTTPRequestHeaders))] mutableCopy];
+    self.queryStringSerializationStyle = (WBHTTPRequestQueryStringSerializationStyle)[[coder decodeObjectOfClass:[NSNumber class] forKey:NSStringFromSelector(@selector(queryStringSerializationStyle))] unsignedIntegerValue];
+    return self;
+}
+
+- (void)encodeWithCoder:(NSCoder *)coder{
+    
+    dispatch_sync(self.requestHeaderModificationQueue, ^{
+        [coder encodeObject:self.mutableHTTPRequestHeaders forKey:NSStringFromSelector(@selector(mutableHTTPRequestHeaders))];
+    });
+    
+    [coder encodeObject:@(self.queryStringSerializationStyle) forKey:NSStringFromSelector(@selector(queryStringSerializationStyle))];
+    
+}
+
+#pragma mark - NSCopying
+- (instancetype)copyWithZone:(NSZone *)zone{
+    
+    WBHTTPRequestSerializer *serializer = [[[self class]allocWithZone:zone]init];
+    
+    dispatch_sync(self.requestHeaderModificationQueue, ^{
+        serializer.mutableHTTPRequestHeaders = self.mutableHTTPRequestHeaders;
+    });
+    serializer.queryStringSerializationStyle = self.queryStringSerializationStyle;
+    serializer.queryStringSerialization = self.queryStringSerialization;
+    return serializer;
+}
+
+
+@end
+
+#pragma mark -
+static NSString *WBCreateMultipartFormBoundary(){
+    
+    return [NSString stringWithFormat:@"Boundary+%08X%08X",arc4random(),arc4random()];
+}
+
+static NSString * const kWBMultipartFormCRLF = @"\r\n";
+
+static inline NSString * WBMultipartFormInitialBoundary(NSString *boundary) {
+    return [NSString stringWithFormat:@"--%@%@", boundary, kWBMultipartFormCRLF];
+}
+
+static inline NSString * WBMultipartFormEncapsulationBoundary(NSString *boundary){
+    
+    return [NSString stringWithFormat:@"%@--%@%@",kWBMultipartFormCRLF,boundary,kWBMultipartFormCRLF];
+}
+
+static inline NSString * WBMultipartFormFinalBoundary(NSString *boundary){
+    
+    return [NSString stringWithFormat:@"%@--%@--%@",kWBMultipartFormCRLF,boundary,kWBMultipartFormCRLF];
+}
+
+static inline NSString *WBContentTypeForPathExtension(NSString *extension){
+    
+    NSString *UTI = (__bridge_transfer NSString *)UTTypeCreatePreferredIdentifierForTag(kUTTagClassFilenameExtension, (__bridge  CFStringRef)extension, NULL);
+    NSString *contentType = (__bridge_transfer NSString *)UTTypeCopyPreferredTagWithClass((__bridge  CFStringRef)UTI, kUTTagClassMIMEType);
+    if (!contentType) {
+        return @"application/octet-stream";
+    }else{
+        return contentType;
+    }
+    
+}
+
+NSUInteger const KWBUploadStream3GSuggestedPacketSize = 1024 * 16;
+NSTimeInterval const kWBUploadStream3GSuggestedDelay = 0.2;
+
+#pragma mark - WBHTTPBodyPart
+ 
+@interface WBHTTPBodyPart : NSObject
+
+@property (nonatomic, assign) NSStringEncoding stringEncoding;
+
+@property (nonatomic, strong) NSDictionary *headers;
+
+@property (nonatomic, copy) NSString *bounday;
+
+@property (nonatomic, strong) id body;
+
+@property (nonatomic, assign) unsigned long long bodyContentLength;
+
+@property (nonatomic, strong) NSInputStream *inputStream;
+
+@property (nonatomic, assign) BOOL hasInitialBounday;
+
+@property (nonatomic, assign) BOOL hasFinalBounday;
+
+@property (nonatomic, readonly, assign, getter=hasByTesAvailable) BOOL bytesAvailable;
+
+@property (nonatomic, readonly, assign) unsigned long long cententLength;
+
+- (NSInteger)read:(uint8_t *)buffer
+        maxLength:(NSUInteger)length;
+
+@end
+
+#pragma mark - WBMultipartBodyStream
+@interface WBMultipartBodyStream : NSInputStream<NSStreamDelegate>
+@property (nonatomic, assign) NSUInteger numberOfBytesInPacket;
+@property (nonatomic, assign) NSTimeInterval delay;
+@property (nonatomic, strong) NSInputStream *inputStream;
+@property (nonatomic, assign, readonly) unsigned long long contentLength;
+@property (nonatomic, assign, readonly, getter=isEmpty) BOOL empty;
+
+- (instancetype)initWithStringEncoding:(NSStringEncoding)encoding;
+- (void)setInitialAndFinalBoundaries;
+- (void)appendHTTPBodyPart:(WBHTTPBodyPart *)bodyPart;
+
+
+@end
+
+#pragma mark - WBStreamingMultipartFormData
+
+@interface WBStreamingMultipartFormData()
+
+@property (readwrite, nonatomic, copy) NSMutableURLRequest *request;
+
+@property (readwrite, nonatomic, assign) NSStringEncoding stringEncoding;
+
+@property (readwrite, nonatomic, copy) NSString *boundray;
+
+@property (readwrite, nonatomic, strong) WBMultipartBodyStream *bodyStream;
+
+
+@end
+
+@implementation WBStreamingMultipartFormData
+
+- (instancetype)initWithURLRequest:(NSMutableURLRequest *)urlRequest stringEncoding:(NSStringEncoding)encoding{
+    self = [super init];
+    if (!self) {
+        return  nil;
+    }
+    self.request = urlRequest;
+    self.stringEncoding = encoding;
+    self.boundray = WBCreateMultipartFormBoundary();
+    self.bodyStream = [[WBMultipartBodyStream alloc]initWithStringEncoding:encoding];
+    return self;
+}
+
+- (void)setRequest:(NSMutableURLRequest *)request{
+    _request = [request mutableCopy];
+    
+}
+
+- (BOOL)appendPartWithFileURL:(NSURL *)fileURL name:(NSString *)name error:(NSError * _Nullable __autoreleasing *)error{
+    
+    NSParameterAssert(fileURL);
+    NSParameterAssert(name);
+    NSString *fileName = [fileURL lastPathComponent];
+    NSString *mimeType = WBContentTypeForPathExtension([fileURL pathExtension]);
+    return [self appendPartWithFileURL:fileURL name:name fileName:fileName mimeType:mimeType error:error];
+    
+}
+
+- (BOOL)appendPartWithFileURL:(NSURL *)fileURL name:(NSString *)name fileName:(NSString *)fileName mimeType:(NSString *)mimeType error:(NSError * _Nullable __autoreleasing *)error{
+    
+    NSParameterAssert(fileURL);
+    NSParameterAssert(name);
+    NSParameterAssert(fileName);
+    NSParameterAssert(mimeType);
+    if (![fileURL isFileURL]) {
+        //如果不是地址
+        NSDictionary *userInfo = @{NSLocalizedFailureReasonErrorKey:NSLocalizedStringFromTable(@"Expected URL to be a file URL", @"WBNetworking", nil)};
+        if (error) {
+            *error = [[NSError alloc]initWithDomain:WBURLRequestSerializationErrorDomain code:NSURLErrorBadURL userInfo:userInfo];
+        }
+        return NO;
+    }
+    
+    NSDictionary *fileAttributes = [[NSFileManager defaultManager] attributesOfItemAtPath:[fileURL path] error:error];
+    //如果地址信息不存在
+    if (!fileAttributes) {
+        return NO;
+    }
+    
+    NSMutableDictionary *mutableHeaders = [NSMutableDictionary dictionary];
+    
+    [mutableHeaders setValue:[NSString stringWithFormat:@"form-data;name=\"%@\";filename=\"%@\"",name,fileName] forKey:@"Content-Disposition"];
+    [mutableHeaders setValue:mimeType forKey:@"Content-Type"];
+    
+    WBHTTPBodyPart *bodyPart = [[WBHTTPBodyPart alloc]init];
+    bodyPart.stringEncoding = self.stringEncoding;
+    bodyPart.headers = mutableHeaders;
+    bodyPart.bounday = self.boundray;
+    bodyPart.body = fileURL;
+    bodyPart.bodyContentLength = [fileAttributes[NSFileSize] unsignedLongLongValue];
+    [self.bodyStream appendHTTPBodyPart:bodyPart];
+    
+    return YES;
+    
+}
+
+- (void)appendPartWithInputStream:(NSInputStream *)inputStream name:(NSString *)name fileName:(NSString *)fileName length:(int64_t)length mimeType:(NSString *)mimeType{
+    
+    NSParameterAssert(name);
+    NSParameterAssert(fileName);
+    NSParameterAssert(mimeType);
+    
+    NSMutableDictionary *mutableHeaders = [NSMutableDictionary dictionary];
+    [mutableHeaders setValue:[NSString stringWithFormat:@"from-data;name=\"%@\";filename=\"%@\"",name,fileName] forKey:@"Content-Disposition"];
+    [mutableHeaders setValue:mimeType forKey:@"Content-Type"];
+    
+    WBHTTPBodyPart *bodyPart = [[WBHTTPBodyPart alloc]init];
+    bodyPart.stringEncoding = self.stringEncoding;
+    bodyPart.headers = mutableHeaders;
+    bodyPart.bounday = self.boundray;
+    bodyPart.inputStream = inputStream;
+    bodyPart.bodyContentLength = (unsigned long long) length;
+    [self.bodyStream appendHTTPBodyPart:bodyPart];
+    
+}
+
+- (void)appendPartWithFileData:(NSData *)data name:(NSString *)name fileName:(NSString *)fileName mimeType:(NSString *)mimeType{
+    
+    NSParameterAssert(name);
+    NSParameterAssert(fileName);
+    NSParameterAssert(mimeType);
+    NSMutableDictionary *mutableHeaders = [NSMutableDictionary dictionary];
+    [mutableHeaders setValue:[NSString stringWithFormat:@"form-data;name=\"%@\";filename=\"%@\"",name,fileName] forKey:@"Content-Disposition"];
+    [mutableHeaders setValue:mimeType forKey:@"Content-Type"];
+    [self appendPartWithHeaders:mutableHeaders body:data];
+}
+
+- (void)appendPartWithFormData:(NSData *)data name:(NSString *)name{
+    
+    NSParameterAssert(name);
+    NSMutableDictionary *mutableHeaders = [NSMutableDictionary dictionary];
+    [mutableHeaders setValue:[NSString stringWithFormat:@"form-data;name=\"%@\"",name] forKey:@"Content-Disposition"];
+    [self appendPartWithHeaders:mutableHeaders body:data];
+    
+}
+
+- (void)appendPartWithHeaders:(NSDictionary<NSString *,NSString *> *)headers body:(NSData *)body{
+    
+    NSParameterAssert(body);
+    WBHTTPBodyPart *bodyPart = [[WBHTTPBodyPart alloc]init];
+    bodyPart.stringEncoding = self.stringEncoding;
+    bodyPart.headers = headers;
+    bodyPart.bounday = self.boundray;
+    bodyPart.bodyContentLength = [body length];
+    bodyPart.body = body;
+    [self.bodyStream appendHTTPBodyPart:bodyPart];
+}
+
+- (void)throttleBandwidthWithPacketSize:(NSUInteger)numberOfBytes delay:(NSTimeInterval)delay{
+    
+    self.bodyStream.numberOfBytesInPacket = numberOfBytes;
+    self.bodyStream.delay = delay;
+}
+
+- (NSMutableURLRequest *)requestByFinalizingMultipartFormData{
+    
+    if ([self.bodyStream isEmpty]) {
+        return  self.request;
+    }
+    
+    [self.bodyStream setInitialAndFinalBoundaries];
+    [self.request setHTTPBodyStream:self.bodyStream];
+    
+    [self.request setValue:[NSString stringWithFormat:@"multipart/form-data;boundary=%@",self.boundray ] forHTTPHeaderField:@"Content-Type"];
+    [self.request setValue:[NSString stringWithFormat:@"%llu",[self.bodyStream contentLength]] forHTTPHeaderField:@"Content-Length"];
+    return  self.request;
+}
+
 
 @end
 
